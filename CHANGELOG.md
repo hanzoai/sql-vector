@@ -1,6 +1,6 @@
 ## 0.8.2 (2026-02-25)
 
-- Fixed buffer overflow with parallel HNSW index build
+- Fixed buffer overflow with parallel HNSW index build - [more info](https://github.com/pgvector/pgvector/issues/959)
 - Improved `install` target on Windows
 - Fixed `Index Searches` in `EXPLAIN` output for Postgres 18
 
