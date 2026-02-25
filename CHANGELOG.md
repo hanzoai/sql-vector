@@ -1,4 +1,4 @@
-## 0.8.2 (unreleased)
+## 0.8.2 (2026-02-25)
 
 - Fixed buffer overflow with parallel HNSW index build
 - Improved `install` target on Windows
