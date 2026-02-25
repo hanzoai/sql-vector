@@ -77,6 +77,8 @@
 #define PARALLEL_KEY_HNSW_AREA			UINT64CONST(0xA000000000000002)
 #define PARALLEL_KEY_QUERY_TEXT			UINT64CONST(0xA000000000000003)
 
+#define HNSW_MAX_GRAPH_MEMORY (SIZE_MAX / 2)
+
 /*
  * Create the metapage
  */
@@ -489,6 +491,7 @@ InsertTuple(Relation index, Datum *values, bool *isnull, ItemPointer heaptid, Hn
 	LWLock	   *flushLock = &graph->flushLock;
 	char	   *base = buildstate->hnswarea;
 	Datum		value;
+	Size		memoryMargin;
 
 	/* Form index value */
 	if (!HnswFormIndexValue(&value, values, isnull, buildstate->typeInfo, support))
@@ -496,6 +499,9 @@ InsertTuple(Relation index, Datum *values, bool *isnull, ItemPointer heaptid, Hn
 
 	/* Get datum size */
 	valueSize = VARSIZE_ANY(DatumGetPointer(value));
+
+	/* In a parallel build, add a margin so allocations never fail */
+	memoryMargin = base == NULL ? 0 : 1024 * 1024;
 
 	/* Ensure graph not flushed when inserting */
 	LWLockAcquire(flushLock, LW_SHARED);
@@ -518,7 +524,7 @@ InsertTuple(Relation index, Datum *values, bool *isnull, ItemPointer heaptid, Hn
 	 * Check that we have enough memory available for the new element now that
 	 * we have the allocator lock, and flush pages if needed.
 	 */
-	if (graph->memoryUsed >= graph->memoryTotal)
+	if (graph->memoryUsed + memoryMargin >= graph->memoryTotal)
 	{
 		LWLockRelease(&graph->allocatorLock);
 
@@ -611,7 +617,7 @@ InitGraph(HnswGraph * graph, char *base, Size memoryTotal)
 	HnswPtrStore(base, graph->head, (HnswElement) NULL);
 	HnswPtrStore(base, graph->entryPoint, (HnswElement) NULL);
 	graph->memoryUsed = 0;
-	graph->memoryTotal = memoryTotal;
+	graph->memoryTotal = Min(memoryTotal, HNSW_MAX_GRAPH_MEMORY);
 	graph->flushed = false;
 	graph->indtuples = 0;
 	SpinLockInit(&graph->lock);
@@ -940,6 +946,8 @@ HnswBeginParallel(HnswBuildState * buildstate, bool isconcurrent, int request)
 	if (esthnswarea > estother)
 		esthnswarea -= estother;
 
+	esthnswarea = Min(esthnswarea, HNSW_MAX_GRAPH_MEMORY);
+
 	shm_toc_estimate_chunk(&pcxt->estimator, esthnswarea);
 	shm_toc_estimate_keys(&pcxt->estimator, 2);
 
@@ -982,8 +990,7 @@ HnswBeginParallel(HnswBuildState * buildstate, bool isconcurrent, int request)
 								  snapshot);
 
 	hnswarea = (char *) shm_toc_allocate(pcxt->toc, esthnswarea);
-	/* Report less than allocated so never fails */
-	InitGraph(&hnswshared->graphData, hnswarea, esthnswarea - 1024 * 1024);
+	InitGraph(&hnswshared->graphData, hnswarea, esthnswarea);
 
 	/*
 	 * Avoid base address for relptr for Postgres < 14.5

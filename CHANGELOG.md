@@ -1,5 +1,6 @@
 ## 0.8.2 (unreleased)
 
+- Fixed buffer overflow with parallel HNSW index build
 - Improved `install` target on Windows
 - Fixed `Index Searches` in `EXPLAIN` output for Postgres 18
 
