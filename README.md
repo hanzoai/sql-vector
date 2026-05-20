@@ -11,6 +11,8 @@ Store your vectors with the rest of your data. Supports:
 
 Plus [ACID](https://en.wikipedia.org/wiki/ACID) compliance, point-in-time recovery, JOINs, and all of the other [great features](https://www.postgresql.org/about/) of Postgres
 
+Have a lot of vectors? Use [quantization](#scaling) to scale
+
 [![Build Status](https://github.com/pgvector/pgvector/actions/workflows/build.yml/badge.svg)](https://github.com/pgvector/pgvector/actions)
 
 ## Installation
@@ -21,7 +23,7 @@ Compile and install the extension (supports Postgres 13+)
 
 ```sh
 cd /tmp
-git clone --branch v0.8.1 https://github.com/pgvector/pgvector.git
+git clone --branch v0.8.2 https://github.com/pgvector/pgvector.git
 cd pgvector
 make
 make install # may need sudo
@@ -38,7 +40,7 @@ Ensure [C++ support in Visual Studio](https://learn.microsoft.com/en-us/cpp/buil
 ```cmd
 set "PGROOT=C:\Program Files\PostgreSQL\18"
 cd %TEMP%
-git clone --branch v0.8.1 https://github.com/pgvector/pgvector.git
+git clone --branch v0.8.2 https://github.com/pgvector/pgvector.git
 cd pgvector
 nmake /F Makefile.win
 nmake /F Makefile.win install
@@ -313,6 +315,8 @@ SET max_parallel_maintenance_workers = 7; -- plus leader
 For a large number of workers, you may need to increase `max_parallel_workers` (8 by default)
 
 The [index options](#index-options) also have a significant impact on build time (use the defaults unless seeing low recall)
+
+Use [binary quantization](#binary-quantization) for faster build times at scale
 
 ### Indexing Progress
 
@@ -673,6 +677,10 @@ SHOW shared_buffers;
 
 Be sure to restart Postgres for changes to take effect.
 
+### Storing
+
+Use the `halfvec` type instead of `vector` for a smaller working set.
+
 ### Loading
 
 Use `COPY` for bulk loading data ([example](https://github.com/pgvector/pgvector-python/blob/master/examples/loading/example.py)).
@@ -686,6 +694,8 @@ Add any indexes *after* loading the initial data for best performance.
 ### Indexing
 
 See index build time for [HNSW](#index-build-time) and [IVFFlat](#index-build-time-1).
+
+Use [binary quantization](#binary-quantization) for smaller indexes and faster build times at scale.
 
 In production environments, create indexes concurrently to avoid blocking writes.
 
@@ -717,6 +727,8 @@ SELECT * FROM items ORDER BY embedding <#> '[3,1,2]' LIMIT 5;
 
 #### Approximate Search
 
+Use [binary quantization](#binary-quantization) with re-ranking to keep indexes in-memory at scale.
+
 To speed up queries with an IVFFlat index, increase the number of inverted lists (at the expense of recall).
 
 ```sql
@@ -732,21 +744,20 @@ REINDEX INDEX CONCURRENTLY index_name;
 VACUUM table_name;
 ```
 
+## Scaling
+
+For a smaller working set:
+
+1. Use the `halfvec` type instead of `vector` for tables
+2. Use [binary quantization](#binary-quantization) for indexes (with re-ranking for search)
+
+Scale vertically by increasing memory, CPU, and storage on a single instance. Use existing tools to [tune parameters](#tuning) and [monitor performance](#monitoring).
+
+Scale horizontally with [replicas](https://www.postgresql.org/docs/current/hot-standby.html), or use [Citus](https://github.com/citusdata/citus), [PgDog](https://github.com/pgdogdev/pgdog), or another approach for sharding ([example](https://github.com/pgvector/pgvector-python/blob/master/examples/citus/example.py)).
+
 ## Monitoring
 
-Monitor performance with [pg_stat_statements](https://www.postgresql.org/docs/current/pgstatstatements.html) (be sure to add it to `shared_preload_libraries`).
-
-```sql
-CREATE EXTENSION pg_stat_statements;
-```
-
-Get the most time-consuming queries with:
-
-```sql
-SELECT query, calls, ROUND((total_plan_time + total_exec_time) / calls) AS avg_time_ms,
-    ROUND((total_plan_time + total_exec_time) / 60000) AS total_time_min
-    FROM pg_stat_statements ORDER BY total_plan_time + total_exec_time DESC LIMIT 20;
-```
+Use existing tools like [pg_stat_statements](https://www.postgresql.org/docs/current/pgstatstatements.html) or [PgHero](https://github.com/ankane/pghero) to monitor performance.
 
 Monitor recall by comparing results from approximate search with exact search.
 
@@ -756,14 +767,6 @@ SET LOCAL enable_indexscan = off; -- use exact search
 SELECT ...
 COMMIT;
 ```
-
-## Scaling
-
-Scale pgvector the same way you scale Postgres.
-
-Scale vertically by increasing memory, CPU, and storage on a single instance. Use existing tools to [tune parameters](#tuning) and [monitor performance](#monitoring).
-
-Scale horizontally with [replicas](https://www.postgresql.org/docs/current/hot-standby.html), or use [Citus](https://github.com/citusdata/citus) or another approach for sharding ([example](https://github.com/pgvector/pgvector-python/blob/master/examples/citus/example.py)).
 
 ## Languages
 
@@ -877,6 +880,8 @@ No, but like other index types, you’ll likely see better performance if they d
 ```sql
 SELECT pg_size_pretty(pg_relation_size('index_name'));
 ```
+
+Use [half-precision indexing](#half-precision-indexing) or [binary quantization](#binary-quantization) for smaller indexes.
 
 ## Troubleshooting
 
@@ -1152,23 +1157,23 @@ This adds pgvector to the [Postgres image](https://hub.docker.com/_/postgres) (r
 
 Supported tags are:
 
-- `pg18-trixie`, `0.8.1-pg18-trixie`
-- `pg18-bookworm`, `0.8.1-pg18-bookworm`, `pg18`, `0.8.1-pg18`
-- `pg17-trixie`, `0.8.1-pg17-trixie`
-- `pg17-bookworm`, `0.8.1-pg17-bookworm`, `pg17`, `0.8.1-pg17`
-- `pg16-trixie`, `0.8.1-pg16-trixie`
-- `pg16-bookworm`, `0.8.1-pg16-bookworm`, `pg16`, `0.8.1-pg16`
-- `pg15-trixie`, `0.8.1-pg15-trixie`
-- `pg15-bookworm`, `0.8.1-pg15-bookworm`, `pg15`, `0.8.1-pg15`
-- `pg14-trixie`, `0.8.1-pg14-trixie`
-- `pg14-bookworm`, `0.8.1-pg14-bookworm`, `pg14`, `0.8.1-pg14`
-- `pg13-trixie`, `0.8.1-pg13-trixie`
-- `pg13-bookworm`, `0.8.1-pg13-bookworm`, `pg13`, `0.8.1-pg13`
+- `pg18-trixie`, `0.8.2-pg18-trixie`
+- `pg18-bookworm`, `0.8.2-pg18-bookworm`, `pg18`, `0.8.2-pg18`
+- `pg17-trixie`, `0.8.2-pg17-trixie`
+- `pg17-bookworm`, `0.8.2-pg17-bookworm`, `pg17`, `0.8.2-pg17`
+- `pg16-trixie`, `0.8.2-pg16-trixie`
+- `pg16-bookworm`, `0.8.2-pg16-bookworm`, `pg16`, `0.8.2-pg16`
+- `pg15-trixie`, `0.8.2-pg15-trixie`
+- `pg15-bookworm`, `0.8.2-pg15-bookworm`, `pg15`, `0.8.2-pg15`
+- `pg14-trixie`, `0.8.2-pg14-trixie`
+- `pg14-bookworm`, `0.8.2-pg14-bookworm`, `pg14`, `0.8.2-pg14`
+- `pg13-trixie`, `0.8.2-pg13-trixie`
+- `pg13-bookworm`, `0.8.2-pg13-bookworm`, `pg13`, `0.8.2-pg13`
 
 You can also build the image manually:
 
 ```sh
-git clone --branch v0.8.1 https://github.com/pgvector/pgvector.git
+git clone --branch v0.8.2 https://github.com/pgvector/pgvector.git
 cd pgvector
 docker build --pull --build-arg PG_MAJOR=18 -t myuser/pgvector .
 ```

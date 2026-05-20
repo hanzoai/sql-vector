@@ -22,6 +22,7 @@
 #include "nodes/execnodes.h"
 #include "optimizer/optimizer.h"
 #include "storage/bufmgr.h"
+#include "storage/condition_variable.h"
 #include "tcop/tcopprot.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
@@ -62,15 +63,13 @@ AddSample(Datum *values, IvfflatBuildState * buildstate)
 	Datum		value = PointerGetDatum(PG_DETOAST_DATUM(values[0]));
 
 	/*
-	 * Normalize with KMEANS_NORM_PROC since spherical distance function
-	 * expects unit vectors
+	 * Check with KMEANS_NORM_PROC that the value can be normalized since
+	 * spherical distance function expects unit vectors
 	 */
 	if (buildstate->kmeansnormprocinfo != NULL)
 	{
 		if (!IvfflatCheckNorm(buildstate->kmeansnormprocinfo, buildstate->collation, value))
 			return;
-
-		value = IvfflatNormValue(buildstate->typeInfo, buildstate->collation, value);
 	}
 
 	if (samples->length < targsamples)
@@ -81,7 +80,7 @@ AddSample(Datum *values, IvfflatBuildState * buildstate)
 	else
 	{
 		if (buildstate->rowstoskip < 0)
-			buildstate->rowstoskip = reservoir_get_next_S(&buildstate->rstate, samples->length, targsamples);
+			buildstate->rowstoskip = reservoir_get_next_S(&buildstate->rstate, buildstate->samplerows, targsamples);
 
 		if (buildstate->rowstoskip <= 0)
 		{
@@ -97,6 +96,9 @@ AddSample(Datum *values, IvfflatBuildState * buildstate)
 
 		buildstate->rowstoskip -= 1;
 	}
+
+	/* Increment after reservoir_get_next_S */
+	buildstate->samplerows += 1;
 }
 
 /*
@@ -133,6 +135,7 @@ SampleRows(IvfflatBuildState * buildstate)
 	int			targsamples = buildstate->samples->maxlen;
 	BlockNumber totalblocks = RelationGetNumberOfBlocks(buildstate->heap);
 
+	buildstate->samplerows = 0;
 	buildstate->rowstoskip = -1;
 
 	BlockSampler_Init(&buildstate->bs, totalblocks, targsamples, RandomInt());
@@ -142,8 +145,29 @@ SampleRows(IvfflatBuildState * buildstate)
 	{
 		BlockNumber targblock = BlockSampler_Next(&buildstate->bs);
 
+		/*
+		 * anyvisible must be false when the scan uses an MVCC snapshot
+		 * (i.e. CREATE INDEX CONCURRENTLY), otherwise PG will assert in
+		 * heapam_index_build_range_scan. Always pass false here, matching
+		 * what table_index_build_scan does internally.
+		 */
 		table_index_build_range_scan(buildstate->heap, buildstate->index, buildstate->indexInfo,
-									 false, true, false, targblock, 1, SampleCallback, (void *) buildstate, NULL);
+									 false, false, false, targblock, 1, SampleCallback, (void *) buildstate, NULL);
+	}
+
+	/* Normalize if needed */
+	if (buildstate->kmeansnormprocinfo != NULL)
+	{
+		VectorArray samples = buildstate->samples;
+
+		for (int i = 0; i < samples->length; i++)
+		{
+			Datum		value = PointerGetDatum(VectorArrayGet(samples, i));
+			Datum		normValue = IvfflatNormValue(buildstate->typeInfo, buildstate->collation, value);
+
+			VectorArraySet(samples, i, DatumGetPointer(normValue));
+			pfree(DatumGetPointer(normValue));
+		}
 	}
 }
 
@@ -374,6 +398,9 @@ InitBuildState(IvfflatBuildState * buildstate, Relation heap, Relation index, In
 	TupleDescInitEntry(buildstate->sortdesc, (AttrNumber) 1, "list", INT4OID, -1, 0);
 	TupleDescInitEntry(buildstate->sortdesc, (AttrNumber) 2, "tid", TIDOID, -1, 0);
 	TupleDescInitEntry(buildstate->sortdesc, (AttrNumber) 3, "vector", TupleDescAttr(buildstate->tupdesc, 0)->atttypid, -1, 0);
+#if PG_VERSION_NUM >= 190000
+	TupleDescFinalize(buildstate->sortdesc);
+#endif
 
 	buildstate->slot = MakeSingleTupleTableSlot(buildstate->sortdesc, &TTSOpsVirtual);
 
@@ -435,7 +462,7 @@ ComputeCenters(IvfflatBuildState * buildstate)
 	buildstate->samples = VectorArrayInit(numSamples, buildstate->dimensions, buildstate->centers->itemsize);
 	if (buildstate->heap != NULL)
 	{
-		SampleRows(buildstate);
+		IvfflatBench("sample rows", SampleRows(buildstate));
 
 		if (buildstate->samples->length < buildstate->lists)
 		{
@@ -650,7 +677,11 @@ IvfflatParallelScanAndSort(IvfflatSpool * ivfspool, IvfflatShared * ivfshared, S
 	ivfspool->sortstate = InitBuildSortState(buildstate.sortdesc, sortmem, coordinate);
 	buildstate.sortstate = ivfspool->sortstate;
 	scan = table_beginscan_parallel(ivfspool->heap,
-									ParallelTableScanFromIvfflatShared(ivfshared));
+									ParallelTableScanFromIvfflatShared(ivfshared)
+#if PG_VERSION_NUM >= 190000
+									,SO_NONE
+#endif
+		);
 	reltuples = table_index_build_scan(ivfspool->heap, ivfspool->index, indexInfo,
 									   true, progress, BuildCallback,
 									   (void *) &buildstate, scan);
