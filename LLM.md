@@ -1,4 +1,4 @@
-# sql-vector — AI Assistant Context
+# sql-vector
 
 # pgvector
 
