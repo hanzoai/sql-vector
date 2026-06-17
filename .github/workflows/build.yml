@@ -108,7 +108,7 @@ jobs:
         run: cat regression.diffs
   i386:
     if: ${{ !startsWith(github.ref_name, 'mac') && !startsWith(github.ref_name, 'windows') }}
-    runs-on: ubuntu-latest
+    runs-on: hanzo-build-linux-amd64
     container:
       image: debian:12
       options: --platform linux/386
@@ -131,7 +131,7 @@ jobs:
         run: cat pgvector/regression.diffs
   valgrind:
     if: ${{ !startsWith(github.ref_name, 'mac') && !startsWith(github.ref_name, 'windows') }}
-    runs-on: ubuntu-latest
+    runs-on: hanzo-build-linux-amd64
     steps:
       - uses: actions/checkout@v6
       - uses: ankane/setup-postgres-valgrind@v1
