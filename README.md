@@ -1,3 +1,5 @@
+<p align="center"><img src=".github/hero.svg" alt="sql-vector" width="880"></p>
+
 # pgvector
 
 Open-source vector similarity search for Postgres
