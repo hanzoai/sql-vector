@@ -1,0 +1,8 @@
+# No images: on purpose. The Dockerfile does not build this repo — it ADDs
+# github.com/pgvector/pgvector.git#v0.8.2 and compiles THAT, so gating on it
+# would be green over src/ no matter what src/ contained. This compiles the
+# repo's own C. postgresql-server-dev is the documented build prerequisite for
+# a PGXS extension; without pg_config there is nothing to compile against.
+test:
+  - name: build
+    run: sudo apt-get update && sudo apt-get install -y --no-install-recommends build-essential postgresql-server-dev-all && make OPTFLAGS=""
