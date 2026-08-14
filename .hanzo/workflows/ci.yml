@@ -1,0 +1,45 @@
+# Build the extension and run its regression suite against one PostgreSQL.
+#
+# Upstream's matrix covered PostgreSQL 13-19 across ubuntu-22.04/24.04 (x86 and
+# arm), macOS and Windows. None of those labels exist on this fleet, and an
+# unserved label queues instead of failing — so that matrix has not been running,
+# it has been sitting in a queue looking like nothing was wrong. What is kept is
+# one column of it, on a runner that answers: the version drift that a matrix
+# catches is now uncovered, and that is a real loss, but a single gate that runs
+# beats seven that do not.
+name: CI
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: hanzo-build-linux-amd64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install PostgreSQL server headers
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            postgresql-16 postgresql-server-dev-16 build-essential
+
+      - name: Build
+        run: make PG_CONFIG=/usr/lib/postgresql/16/bin/pg_config
+
+      - name: Install
+        run: sudo make install PG_CONFIG=/usr/lib/postgresql/16/bin/pg_config
+
+      - name: Regression tests
+        run: |
+          set -eux
+          sudo -u postgres /usr/lib/postgresql/16/bin/pg_ctlcluster 16 main start || \
+            sudo pg_ctlcluster 16 main start
+          make installcheck PG_CONFIG=/usr/lib/postgresql/16/bin/pg_config
+
+      - name: Show diffs on failure
+        if: failure()
+        run: cat regression.diffs || true
