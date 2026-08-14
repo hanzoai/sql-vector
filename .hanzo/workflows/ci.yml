@@ -33,11 +33,17 @@ jobs:
       - name: Install
         run: sudo make install PG_CONFIG=/usr/lib/postgresql/16/bin/pg_config
 
+      # installcheck connects as the invoking user. That is root here, and a
+      # fresh cluster has no root role, so the suite bailed on the first psql
+      # with `role "root" does not exist` -- after the extension had already
+      # built and installed cleanly. Give root a superuser role instead of
+      # running the suite as postgres, so the test database is created and
+      # dropped by the same user that owns the build tree.
       - name: Regression tests
         run: |
           set -eux
-          sudo -u postgres /usr/lib/postgresql/16/bin/pg_ctlcluster 16 main start || \
-            sudo pg_ctlcluster 16 main start
+          sudo pg_ctlcluster 16 main start
+          sudo -u postgres createuser -s root
           make installcheck PG_CONFIG=/usr/lib/postgresql/16/bin/pg_config
 
       - name: Show diffs on failure
